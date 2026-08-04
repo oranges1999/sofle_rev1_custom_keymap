@@ -2,7 +2,7 @@
 #include "quantum.h"
 #include "oled_cyberdeck.h"
 
-#define V_COLS 5
+#define LINE_COLS 21
 
 static uint32_t prng_state = 0xC0FFEE42;
 
@@ -24,89 +24,197 @@ static uint8_t vstrlen(const char *text) {
     return n;
 }
 
-static uint8_t oled_write_vertical(const char *text, uint8_t start, bool invert) {
-    uint8_t len = vstrlen(text);
-    uint8_t line = start;
-    for (uint8_t i = 0; i < len; i += V_COLS) {
-        char buf[V_COLS + 1];
-        for (uint8_t k = 0; k < V_COLS; k++) {
-            buf[k] = (i + k < len) ? pgm_read_byte(&text[i + k]) : ' ';
-        }
-        buf[V_COLS] = '\0';
-        oled_set_cursor(0, line++);
-        oled_write(buf, invert);
+// ---- Hiệu ứng glitch toàn màn hình (định kỳ) ----
+static uint32_t next_glitch     = 0;
+static uint32_t glitch_start    = 0;
+static uint32_t glitch_end      = 0;
+static uint8_t  glitch_line_sel = 0;
+
+#define GLITCH_PERIOD_MS 1800
+#define GLITCH_BURST_MS  150
+
+static uint8_t glitch_line_state(uint8_t line) {
+    uint32_t now = timer_read32();
+    if (now >= next_glitch) {
+        glitch_start = now;
+        glitch_end = now + GLITCH_BURST_MS;
+        next_glitch = now + GLITCH_PERIOD_MS;
+        glitch_line_sel = prng_next() % 4;
     }
-    return line;
+    if (now >= glitch_end) return 0;
+    if (line == glitch_line_sel) return 2;
+    return 1;
 }
 
-static uint8_t oled_write_vertical_glitched(const char *text, uint8_t start, uint8_t reveal, bool invert) {
-    uint8_t len = vstrlen(text);
-    uint8_t line = start;
-    for (uint8_t i = 0; i < len; i += V_COLS) {
-        char buf[V_COLS + 1];
-        for (uint8_t k = 0; k < V_COLS; k++) {
-            uint8_t idx = i + k;
-            if (idx >= len) {
-                buf[k] = ' ';
-            } else {
-                char c = pgm_read_byte(&text[idx]);
-                if (c == ' ') {
-                    buf[k] = ' ';
-                } else if (idx < reveal) {
-                    buf[k] = c;
-                } else {
-                    buf[k] = glitch_char();
-                }
-            }
+static void oled_write_line_final(uint8_t line, char *buf, bool invert) {
+    uint8_t gs = glitch_line_state(line);
+    if (gs == 1) {
+        oled_set_cursor(1, line);
+        oled_write(&buf[1], false);
+    } else if (gs == 2) {
+        for (uint8_t k = 0; k < 3; k++) {
+            buf[prng_next() % (LINE_COLS - 1)] = glitch_char();
         }
-        buf[V_COLS] = '\0';
-        oled_set_cursor(0, line++);
-        oled_write(buf, invert);
-    }
-    return line;
-}
-
-static uint8_t oled_write_vertical_flicker(const char *text, uint8_t start, uint8_t flicker_pos, bool invert) {
-    uint8_t len = vstrlen(text);
-    uint8_t line = start;
-    for (uint8_t i = 0; i < len; i += V_COLS) {
-        char buf[V_COLS + 1];
-        for (uint8_t k = 0; k < V_COLS; k++) {
-            uint8_t idx = i + k;
-            if (idx >= len) {
-                buf[k] = ' ';
-            } else {
-                buf[k] = (idx == flicker_pos) ? glitch_char() : pgm_read_byte(&text[idx]);
-            }
-        }
-        buf[V_COLS] = '\0';
-        oled_set_cursor(0, line++);
-        oled_write(buf, invert);
-    }
-    return line;
-}
-
-static void oled_write_vertical_bar(uint8_t start, uint8_t filled) {
-    char buf[V_COLS + 1];
-    for (uint8_t l = 0; l < 3; l++) {
-        for (uint8_t c = 0; c < V_COLS; c++) {
-            buf[c] = ((uint8_t)(l * V_COLS + c) < filled) ? '#' : '-';
-        }
-        buf[V_COLS] = '\0';
-        oled_set_cursor(0, start + l);
+        oled_set_cursor(0, line);
         oled_write(buf, false);
+    } else {
+        oled_set_cursor(0, line);
+        oled_write(buf, invert);
     }
+}
+
+// Ghi đầy đủ 1 dòng 21 ký tự (không gọi oled_clear mỗi frame để giảm tải I2C).
+// Tất cả dòng text đều có dấu '> ' ở đầu (kiểu terminal), trừ progress bar.
+static void oled_write_line_plain(const char *text, uint8_t line, bool invert) {
+    char buf[LINE_COLS + 1];
+    uint8_t len = vstrlen(text);
+    buf[0] = '>';
+    buf[1] = ' ';
+    for (uint8_t i = 0; i < LINE_COLS - 2; i++) {
+        buf[i + 2] = (i < len) ? pgm_read_byte(&text[i]) : ' ';
+    }
+    buf[LINE_COLS] = '\0';
+    oled_write_line_final(line, buf, invert);
+}
+
+// Glitch reveal: ký tự index < reveal là thật, còn lại là ký tự rác. cursor '_' ở cuối.
+static void oled_write_line_full(const char *text, uint8_t line, uint8_t reveal, bool cursor, bool invert) {
+    char buf[LINE_COLS + 1];
+    uint8_t len = vstrlen(text);
+    buf[0] = '>';
+    buf[1] = ' ';
+    for (uint8_t i = 0; i < LINE_COLS - 2; i++) {
+        if (i >= len) {
+            buf[i + 2] = (cursor && i == len) ? '_' : ' ';
+        } else {
+            char c = pgm_read_byte(&text[i]);
+            if (c == ' ') {
+                buf[i + 2] = ' ';
+            } else if (i < reveal) {
+                buf[i + 2] = c;
+            } else {
+                buf[i + 2] = glitch_char();
+            }
+        }
+    }
+    buf[LINE_COLS] = '\0';
+    oled_write_line_final(line, buf, invert);
+}
+
+// Flicker: 1 ký tự ngẫu nhiên thành ký tự rác trong 1 frame.
+static void oled_write_line_flicker(const char *text, uint8_t line, uint8_t flicker_pos, bool invert) {
+    char buf[LINE_COLS + 1];
+    uint8_t len = vstrlen(text);
+    buf[0] = '>';
+    buf[1] = ' ';
+    for (uint8_t i = 0; i < LINE_COLS - 2; i++) {
+        if (i >= len) {
+            buf[i + 2] = ' ';
+        } else {
+            buf[i + 2] = (i == flicker_pos) ? glitch_char() : pgm_read_byte(&text[i]);
+        }
+    }
+    buf[LINE_COLS] = '\0';
+    oled_write_line_final(line, buf, invert);
+}
+
+static void oled_write_layer_line(uint8_t line, const char *name, uint8_t reveal, bool invert) {
+    static const char lbl[] PROGMEM = "LAYER: ";
+    char buf[LINE_COLS + 1];
+    uint8_t nlen = vstrlen(name);
+    buf[0] = '>';
+    buf[1] = ' ';
+    for (uint8_t i = 0; i < LINE_COLS - 2; i++) {
+        if (i < 7) {
+            buf[i + 2] = pgm_read_byte(&lbl[i]);
+        } else if (i < 7 + nlen) {
+            char c = pgm_read_byte(&name[i - 7]);
+            buf[i + 2] = (c == ' ') ? ' ' : ((i - 7) < reveal ? c : glitch_char());
+        } else {
+            buf[i + 2] = ' ';
+        }
+    }
+    buf[LINE_COLS] = '\0';
+    oled_write_line_final(line, buf, invert);
+}
+
+static void oled_write_caps_line(uint8_t line, bool caps, uint8_t reveal, bool invert) {
+    static const char lbl[]  PROGMEM = "CAPS ";
+    static const char on_s[] PROGMEM = "ON";
+    char buf[LINE_COLS + 1];
+    uint8_t i = 2;
+    buf[0] = '>';
+    buf[1] = ' ';
+    for (uint8_t k = 0; k < 5; k++) {
+        buf[i++] = pgm_read_byte(&lbl[k]);
+    }
+    if (caps) {
+        for (uint8_t k = 0; k < 2; k++) {
+            char c = pgm_read_byte(&on_s[k]);
+            buf[i++] = (k < reveal) ? c : glitch_char();
+        }
+    }
+    for (; i < LINE_COLS; i++) {
+        buf[i] = ' ';
+    }
+    buf[LINE_COLS] = '\0';
+    oled_write_line_final(line, buf, invert);
+}
+
+static void oled_write_mode_line(uint8_t line, bool mac, uint8_t reveal, bool invert) {
+    static const char lbl[]   PROGMEM = "MODE ";
+    static const char mac_s[] PROGMEM = "MAC";
+    static const char win_s[] PROGMEM = "WIN";
+    char buf[LINE_COLS + 1];
+    uint8_t i = 2;
+    buf[0] = '>';
+    buf[1] = ' ';
+    for (uint8_t k = 0; k < 5; k++) {
+        buf[i++] = pgm_read_byte(&lbl[k]);
+    }
+    const char *m = mac ? mac_s : win_s;
+    for (uint8_t k = 0; k < 3; k++) {
+        char c = pgm_read_byte(&m[k]);
+        buf[i++] = (k < reveal) ? c : glitch_char();
+    }
+    for (; i < LINE_COLS; i++) {
+        buf[i] = ' ';
+    }
+    buf[LINE_COLS] = '\0';
+    oled_write_line_final(line, buf, invert);
+}
+
+// Dòng bar + hex feedback.
+static void oled_write_status_line(uint8_t line, uint8_t fill, uint8_t bar_total, bool show_hex, uint8_t hex_val, bool fade) {
+    static const char hexd[] PROGMEM = "0123456789ABCDEF";
+    char buf[LINE_COLS + 1];
+    uint8_t i = 0;
+    for (; i < bar_total; i++) {
+        buf[i] = (i < fill) ? '#' : '-';
+    }
+    if (show_hex) {
+        buf[i++] = ' ';
+        buf[i++] = '0';
+        buf[i++] = 'x';
+        buf[i++] = pgm_read_byte(&hexd[hex_val >> 4]);
+        buf[i++] = pgm_read_byte(&hexd[hex_val & 0xF]);
+    }
+    for (; i < LINE_COLS; i++) {
+        buf[i] = ' ';
+    }
+    buf[LINE_COLS] = '\0';
+    oled_write_line_final(line, buf, fade);
 }
 
 oled_rotation_t oled_init_user(oled_rotation_t rotation) {
     if (is_keyboard_master()) {
-        return OLED_ROTATION_270;
+        return OLED_ROTATION_0;
     }
-    return OLED_ROTATION_90;
+    return OLED_ROTATION_180;
 }
 
 enum cyber_phase { PHASE_BOOT, PHASE_MAIN };
-enum main_state  { MAIN_NORMAL, MAIN_SHUTDOWN, MAIN_SCREEN_OFF, MAIN_WAKE };
+enum main_state  { MAIN_NORMAL, MAIN_SCREEN_OFF };
 
 static enum cyber_phase phase = PHASE_BOOT;
 static enum main_state  mstate = MAIN_NORMAL;
@@ -115,17 +223,13 @@ static uint32_t boot_start = 0;
 
 #define BOOT_TOTAL_MS  4000
 #define BOOT_ONLINE_MS 3400
-#define BAR_UNITS      15
+#define BAR_UNITS      21
 
 static uint32_t last_input     = 0;
-static uint32_t shutdown_start = 0;
-static uint32_t wake_start     = 0;
 static uint32_t hex_start      = 0;
 static uint8_t  hex_val        = 0;
 
 #define IDLE_TIMEOUT_MS   120000
-#define SHUTDOWN_ANIM_MS  500
-#define WAKE_ANIM_MS      500
 #define HEX_ANIM_MS       1000
 
 static void render_boot(uint32_t now) {
@@ -133,55 +237,29 @@ static void render_boot(uint32_t now) {
 
     uint8_t rev0 = (uint8_t)(t / 100);
     if (rev0 > 9) rev0 = 9;
-    oled_write_vertical_glitched(PSTR("CYBERDECK"), 0, rev0, false);
+    oled_write_line_full(PSTR("CYBERDECK"), 0, rev0, false, false);
 
     uint8_t rev1 = (t > 100 ? (t - 100) / 80 : 0);
     if (rev1 > 10) rev1 = 10;
-    oled_write_vertical_glitched(PSTR("INITIATING"), 2, rev1, false);
+    oled_write_line_full(PSTR("INITIATING"), 1, rev1, false, false);
 
     uint8_t fill = (uint8_t)(t * BAR_UNITS / BOOT_TOTAL_MS);
     if (fill > BAR_UNITS) fill = BAR_UNITS;
-    oled_write_vertical_bar(4, fill);
+    oled_write_status_line(2, fill, BAR_UNITS, false, 0, false);
 
     if (t >= BOOT_ONLINE_MS) {
-        oled_write_vertical_glitched(PSTR("SYSTEM ONLINE"), 8, 13, true);
+        oled_write_line_full(PSTR("SYSTEM ONLINE"), 3, 13, false, true);
+    } else {
+        oled_write_line_plain(PSTR(""), 3, false);
     }
-}
-
-static void oled_write_glitched_line(const char *text, uint8_t reveal, uint8_t len, bool invert) {
-    char buf[V_COLS + 1];
-    for (uint8_t i = 0; i < len; i++) {
-        char c = pgm_read_byte(&text[i]);
-        if (c == ' ') {
-            buf[i] = ' ';
-        } else if (i < reveal) {
-            buf[i] = c;
-        } else {
-            buf[i] = glitch_char();
-        }
-    }
-    buf[len] = '\0';
-    oled_write(buf, invert);
-}
-
-static void oled_write_hex(uint8_t val, bool invert) {
-    static const char hexdigits[] PROGMEM = "0123456789ABCDEF";
-    char buf[5];
-    buf[0] = '0';
-    buf[1] = 'x';
-    buf[2] = pgm_read_byte(&hexdigits[val >> 4]);
-    buf[3] = pgm_read_byte(&hexdigits[val & 0xF]);
-    buf[4] = '\0';
-    oled_write(buf, invert);
 }
 
 static void render_left_main(uint32_t now) {
-    oled_write_vertical(PSTR("CYBERDECK"), 0, false);
-
     static const char layer_names[][8] PROGMEM = { "QWERTY", "COLEMAK", "LOWER", "RAISE", "ADJUST" };
 
-    // L3 nhãn LAYER, L4-5 tên layer
-    oled_write_vertical(PSTR("LAYER"), 3, false);
+    oled_write_line_plain(PSTR("CYBERDECK // v1.0.0"), 0, false);
+
+    // L1: LAYER: <name>
     uint8_t layer = get_highest_layer(layer_state);
     if (layer > 4) layer = 4;
     static uint8_t  last_layer = 0xFF;
@@ -191,14 +269,10 @@ static void render_left_main(uint32_t now) {
         layer_anim = now;
     }
     uint32_t lt = now - layer_anim;
-    if (lt < 300) {
-        oled_write_vertical_glitched(layer_names[layer], 4, (uint8_t)(lt / 40), false);
-    } else {
-        oled_write_vertical(layer_names[layer], 4, false);
-    }
+    uint8_t  reveal = (lt < 300) ? (uint8_t)(lt / 40) : 21;
+    oled_write_layer_line(1, layer_names[layer], reveal, false);
 
-    // L6 nhãn CAPS, L7 trạng thái
-    oled_write_vertical(PSTR("CAPS"), 6, false);
+    // L2: CAPS indicator (glitch reveal giống dòng LAYER)
     bool caps = host_keyboard_led_state().caps_lock;
     static bool  last_caps = false;
     static uint32_t caps_anim = 0;
@@ -206,16 +280,11 @@ static void render_left_main(uint32_t now) {
         last_caps = caps;
         caps_anim = now;
     }
-    oled_set_cursor(0, 7);
-    if (caps) {
-        bool blink = (now - caps_anim) < 400 && ((now >> 8) & 1);
-        oled_write_P(PSTR("ON"), blink);
-    } else {
-        oled_write_P(PSTR("   "), false);
-    }
+    uint32_t ct = now - caps_anim;
+    uint8_t  creveal = (ct < 300) ? (uint8_t)(ct / 100) : 3;
+    oled_write_caps_line(2, caps, creveal, false);
 
-    // L8 nhãn MODE, L9 WIN/MAC
-    oled_write_vertical(PSTR("MODE"), 8, false);
+    // L3: MODE WIN/MAC
     bool mac = keymap_config.swap_lctl_lgui;
     static bool  last_mac = false;
     static uint32_t mode_anim = 0;
@@ -223,12 +292,8 @@ static void render_left_main(uint32_t now) {
         last_mac = mac;
         mode_anim = now;
     }
-    oled_set_cursor(0, 9);
-    if ((now - mode_anim) < 300) {
-        oled_write_glitched_line(PSTR("WIN"), (uint8_t)((now - mode_anim) / 75), 3, true);
-    } else {
-        oled_write_P(mac ? PSTR("MAC") : PSTR("WIN"), false);
-    }
+    uint8_t mreveal = ((now - mode_anim) < 300) ? (uint8_t)((now - mode_anim) / 75) : 3;
+    oled_write_mode_line(3, mac, mreveal, false);
 }
 
 static const char phrases[][18] PROGMEM = {
@@ -245,49 +310,47 @@ static void render_right_main(uint32_t now) {
     static uint8_t  phrase_idx = 0;
     static uint32_t cycle_start = 0;
 
+    oled_write_line_plain(PSTR(""), 0, false);
+    oled_write_line_plain(PSTR(""), 2, false);
+
     uint32_t t = now - cycle_start;
     uint8_t  len = vstrlen(phrases[phrase_idx]);
-
-    // Căn giữa câu trong vùng L1-8
-    uint8_t phrase_lines = (len + V_COLS - 1) / V_COLS;
-    uint8_t area_start = (uint8_t)(4 - phrase_lines / 2 + 1);
-    if (area_start < 1) area_start = 1;
 
     if (t < TYPE_MS) {
         uint8_t rev = (uint8_t)(t * len / TYPE_MS);
         if (rev > len) rev = len;
-        oled_write_vertical_glitched(phrases[phrase_idx], area_start, rev, false);
+        bool cur = ((now >> 8) & 1);
+        oled_write_line_full(phrases[phrase_idx], 1, rev, cur, false);
     } else if (t < GLITCHOUT_T) {
         if ((prng_next() % 40) == 0) {
-            oled_write_vertical_flicker(phrases[phrase_idx], area_start, prng_next() % len, false);
+            oled_write_line_flicker(phrases[phrase_idx], 1, prng_next() % len, false);
         } else {
-            oled_write_vertical(phrases[phrase_idx], area_start, false);
+            oled_write_line_plain(phrases[phrase_idx], 1, false);
         }
     } else {
         uint8_t rev = len - (uint8_t)((t - GLITCHOUT_T) * len / (CYCLE_MS - GLITCHOUT_T));
         if (rev > len) rev = len;
-        oled_write_vertical_glitched(phrases[phrase_idx], area_start, rev, false);
+        oled_write_line_full(phrases[phrase_idx], 1, rev, false, false);
         if (t >= CYCLE_MS) {
             phrase_idx = (phrase_idx + 1) % NUM_PHRASES;
             cycle_start = now;
         }
     }
 
-    // Progress bar dọc L12-14
+    // L3: progress bar + hex feedback
     uint8_t fill = (uint8_t)(t * BAR_UNITS / CYCLE_MS);
     if (fill > BAR_UNITS) fill = BAR_UNITS;
-    oled_write_vertical_bar(12, fill);
-
-    // Hex feedback L15
     uint32_t ht = now - hex_start;
     if (hex_start != 0 && ht < HEX_ANIM_MS) {
-        oled_set_cursor(0, 15);
+        bool fade = (ht > HEX_ANIM_MS * 3 / 4) ? ((now >> 8) & 1) : false;
         if (ht > HEX_ANIM_MS / 2 && (prng_next() & 3) == 0) {
-            oled_write_hex(prng_next() & 0xFF, false); // giá trị nhiễu
+            oled_write_status_line(3, fill, 14, true, (uint8_t)(prng_next() & 0xFF), fade);
         } else {
-            oled_write_hex(hex_val, (ht > HEX_ANIM_MS * 3 / 4) ? ((now >> 8) & 1) : false);
+            oled_write_status_line(3, fill, 14, true, hex_val, fade);
         }
         if (ht >= HEX_ANIM_MS) hex_start = 0;
+    } else {
+        oled_write_status_line(3, fill, BAR_UNITS, false, 0, false);
     }
 }
 
@@ -314,33 +377,18 @@ static void oled_task_user_impl(void) {
                 render_right_main(now);
             }
             if (now - last_input >= IDLE_TIMEOUT_MS) {
-                mstate = MAIN_SHUTDOWN;
-                shutdown_start = now;
-            }
-            break;
-        case MAIN_SHUTDOWN:
-            oled_write_vertical_glitched(PSTR("SYSTEM OFFLINE"), 5, 0, true);
-            if (now - shutdown_start >= SHUTDOWN_ANIM_MS) {
                 oled_off();
                 mstate = MAIN_SCREEN_OFF;
             }
             break;
         case MAIN_SCREEN_OFF:
             break;
-        case MAIN_WAKE:
-            oled_write_vertical_glitched(PSTR("REBOOTING"), 6, (uint8_t)((now - wake_start) / 60), true);
-            if (now - wake_start >= WAKE_ANIM_MS) {
-                oled_clear();
-                mstate = MAIN_NORMAL;
-            }
-            break;
     }
 }
 
 bool oled_task_user(void) {
-    oled_clear();
     oled_task_user_impl();
-    return true;
+    return false; // ngăn board-level oled_task_kb (sofle.c) vẽ text/QMK logo mặc định
 }
 
 void cyberdeck_key_pressed(void) {
@@ -348,10 +396,10 @@ void cyberdeck_key_pressed(void) {
     last_input = now;
     if (phase != PHASE_MAIN) return;
 
-    if (mstate == MAIN_SCREEN_OFF || mstate == MAIN_SHUTDOWN) {
+    if (mstate == MAIN_SCREEN_OFF) {
         oled_on();
-        mstate = MAIN_WAKE;
-        wake_start = now;
+        oled_clear();
+        mstate = MAIN_NORMAL;
     } else if (mstate == MAIN_NORMAL) {
         hex_start = now;
         hex_val = prng_next() & 0xFF;
