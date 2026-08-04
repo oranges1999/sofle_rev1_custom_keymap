@@ -1,1 +1,6 @@
 TRI_LAYER_ENABLE = yes
+ENCODER_MAP_ENABLE = yes
+MOUSEKEY_ENABLE = yes
+OLED_ENABLE = yes
+OLED_DRIVER = ssd1306
+SRC += oled_cyberdeck.c
