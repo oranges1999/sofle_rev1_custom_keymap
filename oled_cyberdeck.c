@@ -84,73 +84,30 @@ static void oled_write_line_flicker(const char *text, uint8_t line, uint8_t flic
     oled_write_line_final(line, buf, invert);
 }
 
-static void oled_write_layer_line(uint8_t line, const char *name, uint8_t reveal, bool invert) {
-    static const char lbl[] PROGMEM = "LAYER: ";
+// Info line: "LABEL:" pad tới INFO_LABEL_W, rồi value (glitch reveal). Các dòng LAYER/CAPSLOCK/MODE đồng đều.
+#define INFO_LABEL_W 10
+
+static void oled_write_info_line(uint8_t line, const char *label, const char *value, uint8_t reveal, bool invert) {
     char buf[LINE_COLS + 1];
-    uint8_t nlen = vstrlen(name);
-    buf[0] = '>';
-    buf[1] = ' ';
-    for (uint8_t i = 0; i < LINE_COLS - 2; i++) {
-        if (i < 7) {
-            buf[i + 2] = pgm_read_byte(&lbl[i]);
-        } else if (i < 7 + nlen) {
-            char c = pgm_read_byte(&name[i - 7]);
-            buf[i + 2] = (c == ' ') ? ' ' : ((i - 7) < reveal ? c : glitch_char());
+    uint8_t i = 0;
+    for (; i < INFO_LABEL_W; i++) {
+        char c = pgm_read_byte(&label[i]);
+        buf[i] = (c == '\0') ? ' ' : c;
+    }
+    uint8_t vlen = vstrlen(value);
+    for (; i < LINE_COLS; i++) {
+        uint8_t k = i - INFO_LABEL_W;
+        if (k < vlen) {
+            char c = pgm_read_byte(&value[k]);
+            buf[i] = (k < reveal) ? c : glitch_char();
         } else {
-            buf[i + 2] = ' ';
+            buf[i] = ' ';
         }
     }
     buf[LINE_COLS] = '\0';
     oled_write_line_final(line, buf, invert);
 }
 
-static void oled_write_caps_line(uint8_t line, bool caps, uint8_t reveal, bool invert) {
-    static const char lbl[]  PROGMEM = "CAPS ";
-    static const char on_s[] PROGMEM = "ON";
-    char buf[LINE_COLS + 1];
-    uint8_t i = 2;
-    buf[0] = '>';
-    buf[1] = ' ';
-    for (uint8_t k = 0; k < 5; k++) {
-        buf[i++] = pgm_read_byte(&lbl[k]);
-    }
-    if (caps) {
-        for (uint8_t k = 0; k < 2; k++) {
-            char c = pgm_read_byte(&on_s[k]);
-            buf[i++] = (k < reveal) ? c : glitch_char();
-        }
-    }
-    for (; i < LINE_COLS; i++) {
-        buf[i] = ' ';
-    }
-    buf[LINE_COLS] = '\0';
-    oled_write_line_final(line, buf, invert);
-}
-
-static void oled_write_mode_line(uint8_t line, bool mac, uint8_t reveal, bool invert) {
-    static const char lbl[]   PROGMEM = "MODE ";
-    static const char mac_s[] PROGMEM = "MAC";
-    static const char win_s[] PROGMEM = "WIN";
-    char buf[LINE_COLS + 1];
-    uint8_t i = 2;
-    buf[0] = '>';
-    buf[1] = ' ';
-    for (uint8_t k = 0; k < 5; k++) {
-        buf[i++] = pgm_read_byte(&lbl[k]);
-    }
-    const char *m = mac ? mac_s : win_s;
-    for (uint8_t k = 0; k < 3; k++) {
-        char c = pgm_read_byte(&m[k]);
-        buf[i++] = (k < reveal) ? c : glitch_char();
-    }
-    for (; i < LINE_COLS; i++) {
-        buf[i] = ' ';
-    }
-    buf[LINE_COLS] = '\0';
-    oled_write_line_final(line, buf, invert);
-}
-
-// Dòng bar + hex feedback.
 static void oled_write_status_line(uint8_t line, uint8_t fill, uint8_t bar_total, bool show_hex, uint8_t hex_val, bool fade) {
     static const char hexd[] PROGMEM = "0123456789ABCDEF";
     char buf[LINE_COLS + 1];
@@ -219,7 +176,7 @@ static void render_boot(uint32_t now) {
 static void render_left_main(uint32_t now) {
     static const char layer_names[][8] PROGMEM = { "QWERTY", "COLEMAK", "LOWER", "RAISE", "ADJUST" };
 
-    oled_write_line_plain(PSTR("CYBERDECK // v1.0.0"), 0, false);
+    oled_write_line_plain(PSTR("CYBERDECK // v1.0.1"), 0, false);
 
     // L1: LAYER: <name>
     uint8_t layer = get_highest_layer(layer_state);
@@ -232,7 +189,7 @@ static void render_left_main(uint32_t now) {
     }
     uint32_t lt = now - layer_anim;
     uint8_t  reveal = (lt < 300) ? (uint8_t)(lt / 40) : 21;
-    oled_write_layer_line(1, layer_names[layer], reveal, false);
+    oled_write_info_line(1, PSTR("LAYER:"), layer_names[layer], reveal, false);
 
     // L2: CAPS indicator (glitch reveal giống dòng LAYER)
     bool caps = host_keyboard_led_state().caps_lock;
@@ -244,7 +201,7 @@ static void render_left_main(uint32_t now) {
     }
     uint32_t ct = now - caps_anim;
     uint8_t  creveal = (ct < 300) ? (uint8_t)(ct / 100) : 3;
-    oled_write_caps_line(2, caps, creveal, false);
+    oled_write_info_line(2, PSTR("CAPSLOCK:"), caps ? PSTR("ON") : PSTR("OFF"), creveal, false);
 
     // L3: MODE WIN/MAC
     bool mac = keymap_config.swap_lctl_lgui;
@@ -255,7 +212,7 @@ static void render_left_main(uint32_t now) {
         mode_anim = now;
     }
     uint8_t mreveal = ((now - mode_anim) < 300) ? (uint8_t)((now - mode_anim) / 75) : 3;
-    oled_write_mode_line(3, mac, mreveal, false);
+    oled_write_info_line(3, PSTR("MODE:"), mac ? PSTR("MAC") : PSTR("WIN"), mreveal, false);
 }
 
 static const char phrases[][19] PROGMEM = {

@@ -10,7 +10,18 @@ Build: `qmk compile -kb sofle/rev1 -km sofle_rev1_custom_keymap` — OK, 24146/2
   - ~1/8 frame nhân đôi band (frame jump)
   - ~1/4 frame phủ noise bar dọc
 - Final review: không Critical; finding "Important" (oled_clear bỏ đói smart-renderer) là dương tính giả — `oled_render()` chạy mỗi tick (`quantum/keyboard.c:750`) nên display vẫn full-refresh; Minor còn lại cosmetic, deferred.
-- Size: 24146/28672 bytes (84%).
+- Size: 24146/28672 bytes (84%). **Đã flash cả 2 nửa, cả 2 màn hiển thị đúng mong đợi.**
+
+## Hiển thị OLED màn trái — 3 dòng info đồng đều
+- Helper `oled_write_info_line()` (`oled_cyberdeck.c:90`): label pad tới cột 10, value glitch-reveal.
+- Format (value cùng cột 10):
+  ```
+  LAYER:    QWERTY
+  CAPSLOCK: OFF
+  MODE:     WIN
+  ```
+- `CAPSLOCK:` hiện cả OFF lẫn ON (trước chỉ ON khi bật); nhãn `CAPS` → `CAPSLOCK`.
+- Size hiện tại: 24020/28672 bytes (83%). Đã flash, 2 màn hiển thị đúng.
 
 ## Bước cuối (Task 3 — người dùng flash)
 ```
