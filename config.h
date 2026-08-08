@@ -13,3 +13,7 @@
 // nửa phải không biết phím nào được gõ, vì process_record_user chỉ chạy trên
 // master.
 #define SPLIT_ACTIVITY_ENABLE
+
+// Tắt idle-off: SPLIT_ACTIVITY_ENABLE đồng bộ timestamp nhưng không gọi
+// oled_on(), nên màn phải sẽ tắt sau 60s nếu chỉ gõ ở nửa trái.
+#define OLED_TIMEOUT 0
