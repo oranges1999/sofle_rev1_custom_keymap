@@ -105,25 +105,14 @@ static void oled_write_info_line(uint8_t line, const char *label, const char *va
     oled_write_line_final(line, buf, invert);
 }
 
-static void oled_write_status_line(uint8_t line, uint8_t fill, uint8_t bar_total, bool show_hex, uint8_t hex_val, bool fade) {
-    static const char hexd[] PROGMEM = "0123456789ABCDEF";
+// Thanh progress 21 ký tự, không có tiền tố "> ".
+static void oled_write_bar_line(uint8_t line, uint8_t fill) {
     char buf[LINE_COLS + 1];
-    uint8_t i = 0;
-    for (; i < bar_total; i++) {
+    for (uint8_t i = 0; i < LINE_COLS; i++) {
         buf[i] = (i < fill) ? '#' : '-';
     }
-    if (show_hex) {
-        buf[i++] = ' ';
-        buf[i++] = '0';
-        buf[i++] = 'x';
-        buf[i++] = pgm_read_byte(&hexd[hex_val >> 4]);
-        buf[i++] = pgm_read_byte(&hexd[hex_val & 0xF]);
-    }
-    for (; i < LINE_COLS; i++) {
-        buf[i] = ' ';
-    }
     buf[LINE_COLS] = '\0';
-    oled_write_line_final(line, buf, fade);
+    oled_write_line_final(line, buf, false);
 }
 
 oled_rotation_t oled_init_user(oled_rotation_t rotation) {
@@ -138,35 +127,51 @@ enum cyber_phase { PHASE_BOOT, PHASE_MAIN };
 static enum cyber_phase phase = PHASE_BOOT;
 
 static uint32_t boot_start = 0;
+static uint32_t main_start = 0;
 
-#define BOOT_TOTAL_MS  4000
-#define BOOT_ONLINE_MS 3400
-#define BAR_UNITS      21
-
-static uint32_t hex_start      = 0;
-static uint8_t  hex_val        = 0;
-
-#define HEX_ANIM_MS       1000
+#define BOOT_T1_MS    900  // xong "CYBERDECK"
+#define BOOT_T2_MS   2000  // xong "INITIATING"
+#define BOOT_T3_MS   3500  // thanh progress đầy
+#define BOOT_T4_MS   3600  // hết khoảng xoá màn
+#define BOOT_TOTAL_MS 5000 // hết nhấp nháy SYSTEM ONLINE, vào màn chính
+#define BOOT_BLINK_MS 350  // nửa chu kỳ nhấp nháy SYSTEM ONLINE
 
 static void render_boot(uint32_t now) {
     uint32_t t = now - boot_start;
 
-    uint8_t rev0 = (uint8_t)(t / 100);
-    if (rev0 > 9) rev0 = 9;
-    oled_write_line_type(PSTR("CYBERDECK"), 0, rev0, false);
+    if (t < BOOT_T3_MS) {
+        // Giai đoạn gõ chữ rồi chạy thanh progress.
+        oled_write_line_type(PSTR("CYBERDECK"), 0, (uint8_t)(t / 100), false);
 
-    uint8_t rev1 = (t > 100 ? (t - 100) / 80 : 0);
-    if (rev1 > 10) rev1 = 10;
-    oled_write_line_type(PSTR("INITIATING"), 1, rev1, false);
+        if (t >= BOOT_T1_MS) {
+            oled_write_line_type(PSTR("INITIATING"), 1, (uint8_t)((t - BOOT_T1_MS) / 110), false);
+        } else {
+            oled_write_line_plain(PSTR(""), 1, false);
+        }
 
-    uint8_t fill = (uint8_t)(t * BAR_UNITS / BOOT_TOTAL_MS);
-    if (fill > BAR_UNITS) fill = BAR_UNITS;
-    oled_write_status_line(2, fill, BAR_UNITS, false, 0, false);
+        if (t >= BOOT_T2_MS) {
+            uint32_t bt   = t - BOOT_T2_MS;
+            uint8_t  fill = (uint8_t)(bt * LINE_COLS / (BOOT_T3_MS - BOOT_T2_MS));
+            if (fill > LINE_COLS) fill = LINE_COLS;
+            oled_write_bar_line(2, fill);
+        } else {
+            oled_write_line_plain(PSTR(""), 2, false);
+        }
 
-    if (t >= BOOT_ONLINE_MS) {
-        oled_write_line_type(PSTR("SYSTEM ONLINE"), 3, 13, true);
-    } else {
         oled_write_line_plain(PSTR(""), 3, false);
+        return;
+    }
+
+    // Xoá màn rồi nhấp nháy SYSTEM ONLINE bằng cách đảo invert.
+    oled_write_line_plain(PSTR(""), 0, false);
+    oled_write_line_plain(PSTR(""), 2, false);
+    oled_write_line_plain(PSTR(""), 3, false);
+
+    if (t < BOOT_T4_MS) {
+        oled_write_line_plain(PSTR(""), 1, false);
+    } else {
+        bool inv = (((t - BOOT_T4_MS) / BOOT_BLINK_MS) & 1) == 0;
+        oled_write_line_type(PSTR("SYSTEM ONLINE"), 1, 13, inv);
     }
 }
 
@@ -252,21 +257,10 @@ static void render_right_main(uint32_t now) {
         }
     }
 
-    // L3: progress bar + hex feedback
-    uint8_t fill = (uint8_t)(t * BAR_UNITS / CYCLE_MS);
-    if (fill > BAR_UNITS) fill = BAR_UNITS;
-    uint32_t ht = now - hex_start;
-    if (hex_start != 0 && ht < HEX_ANIM_MS) {
-        bool fade = (ht > HEX_ANIM_MS * 3 / 4) ? ((now >> 8) & 1) : false;
-        if (ht > HEX_ANIM_MS / 2 && (prng_next() & 3) == 0) {
-            oled_write_status_line(3, fill, 14, true, (uint8_t)(prng_next() & 0xFF), fade);
-        } else {
-            oled_write_status_line(3, fill, 14, true, hex_val, fade);
-        }
-        if (ht >= HEX_ANIM_MS) hex_start = 0;
-    } else {
-        oled_write_status_line(3, fill, BAR_UNITS, false, 0, false);
-    }
+    // L3: progress bar
+    uint8_t fill = (uint8_t)(t * LINE_COLS / CYCLE_MS);
+    if (fill > LINE_COLS) fill = LINE_COLS;
+    oled_write_bar_line(3, fill);
 }
 
 // ---- Full-screen glitch + tearing (định kỳ) ----
@@ -340,7 +334,8 @@ static void oled_task_user_impl(void) {
     if (phase == PHASE_BOOT) {
         if (boot_start == 0) boot_start = now;
         if (now - boot_start >= BOOT_TOTAL_MS) {
-            phase = PHASE_MAIN;
+            phase      = PHASE_MAIN;
+            main_start = now;
             oled_clear();
         } else {
             render_boot(now);
@@ -363,9 +358,4 @@ bool oled_task_user(void) {
 }
 
 void cyberdeck_key_pressed(void) {
-    if (phase != PHASE_MAIN) return;
-
-    uint32_t now = timer_read32();
-    hex_start = now;
-    hex_val = prng_next() & 0xFF;
 }
