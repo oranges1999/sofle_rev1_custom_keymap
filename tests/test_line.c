@@ -27,6 +27,15 @@ static void test_type_reveal_zero(void) {
     assert(stub_screen[0][2] != ' '); // ký tự rác đang giải mã
     assert(stub_screen[0][3] == ' ');
     assert(strlen(stub_screen[0]) == 21);
+
+    // != ' ' là chưa đủ: ký tự thật ('A') cũng != ' '. Lấy mẫu nhiều lần để
+    // chứng minh vị trí con trỏ thật sự là rác, không phải ký tự thật của chuỗi.
+    bool saw_non_real = false;
+    for (int i = 0; i < 8; i++) {
+        oled_write_line_type(PSTR("ABC"), 0, 0, false);
+        if (stub_screen[0][2] != 'A') saw_non_real = true;
+    }
+    assert(saw_non_real);
 }
 
 static void test_type_reveal_giua(void) {
@@ -35,6 +44,14 @@ static void test_type_reveal_giua(void) {
     assert(stub_screen[1][4] != ' '); // rác tại vị trí 2 của chuỗi
     assert(stub_screen[1][5] == ' ');
     assert(strlen(stub_screen[1]) == 21);
+
+    // Ký tự tại con trỏ phải là rác, không phải ký tự thật của chuỗi.
+    bool saw_non_real = false;
+    for (int i = 0; i < 8; i++) {
+        oled_write_line_type(PSTR("ABCDE"), 1, 2, false);
+        if (stub_screen[1][4] != 'C') saw_non_real = true;
+    }
+    assert(saw_non_real);
 }
 
 static void test_type_reveal_bang_do_dai(void) {
@@ -63,6 +80,14 @@ static void test_info_line_dang_decode(void) {
     assert(stub_screen[2][11] != ' '); // rác tại vị trí 1 của value
     assert(stub_screen[2][12] == ' ');
     assert(strlen(stub_screen[2]) == 21);
+
+    // Ký tự tại con trỏ phải là rác, không phải ký tự thật 'I' của "WIN".
+    bool saw_non_real = false;
+    for (int i = 0; i < 8; i++) {
+        oled_write_info_line(2, PSTR("MODE:"), PSTR("WIN"), 1, false);
+        if (stub_screen[2][11] != 'I') saw_non_real = true;
+    }
+    assert(saw_non_real);
 }
 
 static void test_info_reveal(void) {
@@ -124,6 +149,18 @@ static void test_skill_chu_ky_day_du(void) {
     render_right_main(stub_timer);
     assert(skill_st == SKILL_LOADED);
 
+    // Ngay khi vừa vào SKILL_LOADED: bar phải đầy, chữ LOADED đang ở nửa nhấp
+    // nháy bật (thật sự vẽ ra màn, không chỉ suy từ state machine).
+    for (uint8_t i = 0; i < LINE_COLS; i++) {
+        assert(stub_screen[2][i] == '#'); // bar đầy
+    }
+    assert(strncmp(stub_screen[3], "   [ LOADED ]", 13) == 0); // nhấp nháy đang bật
+
+    // Qua nửa chu kỳ nhấp nháy kế tiếp: chữ LOADED phải tắt hẳn.
+    stub_timer += LOADED_BLINK_MS;
+    render_right_main(stub_timer);
+    assert(strncmp(stub_screen[3], "   [ LOADED ]", 13) != 0);
+
     stub_timer += SKILL_LOADED_MS;
     render_right_main(stub_timer);
     assert(skill_st == SKILL_CLEAR);
@@ -133,6 +170,12 @@ static void test_skill_chu_ky_day_du(void) {
     assert(skill_st == SKILL_TYPE);
     assert(skill_idx == 1);
     assert(typed == 0);
+
+    // Dòng 1 phải vẽ skills[skill_idx] (skill thứ 2, "QUICKHACK"), không phải
+    // skills[0] ("BRAINDANCE LOAD...") còn sót lại từ vòng trước.
+    press_key();
+    assert(typed == 1);
+    assert(stub_screen[1][2] == 'Q'); // ký tự thật đầu tiên của skills[1]
 }
 
 static void test_skill_ngung_go_thi_dung_yen(void) {

@@ -328,7 +328,10 @@ static void render_right_main(uint32_t now) {
     uint32_t st   = now - skill_state_start;
     uint8_t  fill = LINE_COLS;
     if (skill_st == SKILL_BAR) {
-        fill = (uint8_t)(st * LINE_COLS / SKILL_BAR_MS);
+        // Làm tròn lên như render_boot, để hai bar dùng chung một quy tắc.
+        fill = (uint8_t)((st * LINE_COLS + SKILL_BAR_MS - 1) / SKILL_BAR_MS);
+        // st < SKILL_BAR_MS luôn đúng nên về lý thuyết fill không vượt LINE_COLS,
+        // nhưng giữ clamp vì làm tròn lên khiến biên trên không còn hiển nhiên.
         if (fill > LINE_COLS) fill = LINE_COLS;
     }
     oled_write_bar_line(2, fill);
