@@ -92,7 +92,11 @@ static void oled_write_info_line(uint8_t line, const char *label, const char *va
     uint8_t i = 0;
     for (; i < INFO_LABEL_W; i++) {
         char c = pgm_read_byte(&label[i]);
-        buf[i] = (c == '\0') ? ' ' : c;
+        if (c == '\0') break;
+        buf[i] = c;
+    }
+    for (; i < INFO_LABEL_W; i++) {
+        buf[i] = ' ';
     }
     uint8_t vlen = vstrlen(value);
     for (; i < LINE_COLS; i++) {
@@ -317,6 +321,12 @@ static void oled_apply_glitch(void) {
             for (uint8_t i = 0; i < 128; i++) {
                 band[i] = (i >= sn) ? s.current_element[i - sn] : 0;
             }
+        }
+
+        // ~1/10 band: dropout cả band. Tạo tương phản band trống/band đầy nên
+        // frame jump và noise bar nổi rõ cả trên màn có 4 dòng text đều nhau.
+        if ((prng_next() % 10) == 0) {
+            for (uint8_t i = 0; i < 128; i++) band[i] = 0;
         }
 
         if ((prng_next() & 3) == 0) { // ~1/4 frame: noise bar
