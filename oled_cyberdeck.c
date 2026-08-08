@@ -191,7 +191,7 @@ static uint8_t info_reveal(uint32_t tm, uint16_t from, uint16_t to, uint32_t sin
 
 static void render_left_main(uint32_t now) {
     static const char layer_names[][8] PROGMEM = {"QWERTY", "COLEMAK", "LOWER", "RAISE", "ADJUST"};
-    static const char header[] PROGMEM         = "CYBERDECK // v1.0.1";
+    static const char header[] PROGMEM         = "CYBERDECK // v1.1.0";
 
     uint32_t tm = now - main_start;
 
