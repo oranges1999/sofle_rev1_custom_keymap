@@ -8,3 +8,12 @@
 #define TRI_LAYER_ADJUST_LAYER 4
 
 #define OLED_DISPLAY_128X32
+
+// Đồng bộ timestamp hoạt động ma trận từ master sang slave. Không có nó thì
+// nửa phải không biết phím nào được gõ, vì process_record_user chỉ chạy trên
+// master.
+#define SPLIT_ACTIVITY_ENABLE
+
+// Tắt idle-off: SPLIT_ACTIVITY_ENABLE đồng bộ timestamp nhưng không gọi
+// oled_on(), nên màn phải sẽ tắt sau 60s nếu chỉ gõ ở nửa trái.
+#define OLED_TIMEOUT 0
