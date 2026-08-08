@@ -43,24 +43,22 @@ static void oled_write_line_plain(const char *text, uint8_t line, bool invert) {
     oled_write_line_final(line, buf, invert);
 }
 
-// Glitch reveal: ký tự index < reveal là thật, còn lại là ký tự rác. cursor '_' ở cuối.
-static void oled_write_line_full(const char *text, uint8_t line, uint8_t reveal, bool cursor, bool invert) {
-    char buf[LINE_COLS + 1];
+// Decode từng ký tự: i < reveal là ký tự thật, i == reveal là ký tự rác đang
+// giải mã, i > reveal để trống. Ký tự rác ở vị trí reveal đóng vai trò con trỏ.
+static void oled_write_line_type(const char *text, uint8_t line, uint8_t reveal, bool invert) {
+    char    buf[LINE_COLS + 1];
     uint8_t len = vstrlen(text);
     buf[0] = '>';
     buf[1] = ' ';
     for (uint8_t i = 0; i < LINE_COLS - 2; i++) {
         if (i >= len) {
-            buf[i + 2] = (cursor && i == len) ? '_' : ' ';
+            buf[i + 2] = ' ';
+        } else if (i < reveal) {
+            buf[i + 2] = pgm_read_byte(&text[i]);
+        } else if (i == reveal) {
+            buf[i + 2] = glitch_char();
         } else {
-            char c = pgm_read_byte(&text[i]);
-            if (c == ' ') {
-                buf[i + 2] = ' ';
-            } else if (i < reveal) {
-                buf[i + 2] = c;
-            } else {
-                buf[i + 2] = glitch_char();
-            }
+            buf[i + 2] = ' ';
         }
     }
     buf[LINE_COLS] = '\0';
@@ -101,9 +99,12 @@ static void oled_write_info_line(uint8_t line, const char *label, const char *va
     uint8_t vlen = vstrlen(value);
     for (; i < LINE_COLS; i++) {
         uint8_t k = i - INFO_LABEL_W;
-        if (k < vlen) {
-            char c = pgm_read_byte(&value[k]);
-            buf[i] = (k < reveal) ? c : glitch_char();
+        if (k >= vlen) {
+            buf[i] = ' ';
+        } else if (k < reveal) {
+            buf[i] = pgm_read_byte(&value[k]);
+        } else if (k == reveal) {
+            buf[i] = glitch_char();
         } else {
             buf[i] = ' ';
         }
@@ -160,18 +161,18 @@ static void render_boot(uint32_t now) {
 
     uint8_t rev0 = (uint8_t)(t / 100);
     if (rev0 > 9) rev0 = 9;
-    oled_write_line_full(PSTR("CYBERDECK"), 0, rev0, false, false);
+    oled_write_line_type(PSTR("CYBERDECK"), 0, rev0, false);
 
     uint8_t rev1 = (t > 100 ? (t - 100) / 80 : 0);
     if (rev1 > 10) rev1 = 10;
-    oled_write_line_full(PSTR("INITIATING"), 1, rev1, false, false);
+    oled_write_line_type(PSTR("INITIATING"), 1, rev1, false);
 
     uint8_t fill = (uint8_t)(t * BAR_UNITS / BOOT_TOTAL_MS);
     if (fill > BAR_UNITS) fill = BAR_UNITS;
     oled_write_status_line(2, fill, BAR_UNITS, false, 0, false);
 
     if (t >= BOOT_ONLINE_MS) {
-        oled_write_line_full(PSTR("SYSTEM ONLINE"), 3, 13, false, true);
+        oled_write_line_type(PSTR("SYSTEM ONLINE"), 3, 13, true);
     } else {
         oled_write_line_plain(PSTR(""), 3, false);
     }
@@ -242,8 +243,7 @@ static void render_right_main(uint32_t now) {
     if (t < TYPE_MS) {
         uint8_t rev = (uint8_t)(t * len / TYPE_MS);
         if (rev > len) rev = len;
-        bool cur = ((now >> 8) & 1);
-        oled_write_line_full(phrases[phrase_idx], 1, rev, cur, false);
+        oled_write_line_type(phrases[phrase_idx], 1, rev, false);
     } else if (t < GLITCHOUT_T) {
         if ((prng_next() % 40) == 0) {
             oled_write_line_flicker(phrases[phrase_idx], 1, prng_next() % len, false);
@@ -253,7 +253,7 @@ static void render_right_main(uint32_t now) {
     } else {
         uint8_t rev = len - (uint8_t)((t - GLITCHOUT_T) * len / (CYCLE_MS - GLITCHOUT_T));
         if (rev > len) rev = len;
-        oled_write_line_full(phrases[phrase_idx], 1, rev, false, false);
+        oled_write_line_type(phrases[phrase_idx], 1, rev, false);
         if (t >= CYCLE_MS) {
             phrase_idx = (phrase_idx + 1) % NUM_PHRASES;
             cycle_start = now;
