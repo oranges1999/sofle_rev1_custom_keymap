@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "quantum.h"
-#include "oled_cyberdeck.h"
 
 #define LINE_COLS 21
 
@@ -65,23 +64,6 @@ static void oled_write_line_type(const char *text, uint8_t line, uint8_t reveal,
     oled_write_line_final(line, buf, invert);
 }
 
-// Flicker: 1 ký tự ngẫu nhiên thành ký tự rác trong 1 frame.
-static void oled_write_line_flicker(const char *text, uint8_t line, uint8_t flicker_pos, bool invert) {
-    char buf[LINE_COLS + 1];
-    uint8_t len = vstrlen(text);
-    buf[0] = '>';
-    buf[1] = ' ';
-    for (uint8_t i = 0; i < LINE_COLS - 2; i++) {
-        if (i >= len) {
-            buf[i + 2] = ' ';
-        } else {
-            buf[i + 2] = (i == flicker_pos) ? glitch_char() : pgm_read_byte(&text[i]);
-        }
-    }
-    buf[LINE_COLS] = '\0';
-    oled_write_line_final(line, buf, invert);
-}
-
 // Info line: "LABEL:" pad tới INFO_LABEL_W, rồi value (glitch reveal). Các dòng LAYER/CAPSLOCK/MODE đồng đều.
 #define INFO_LABEL_W 10
 
@@ -110,6 +92,18 @@ static void oled_write_bar_line(uint8_t line, uint8_t fill) {
     char buf[LINE_COLS + 1];
     for (uint8_t i = 0; i < LINE_COLS; i++) {
         buf[i] = (i < fill) ? '#' : '-';
+    }
+    buf[LINE_COLS] = '\0';
+    oled_write_line_final(line, buf, false);
+}
+
+// Dòng báo nạp xong. "[" nằm ở cột 3, không có tiền tố "> ".
+static void oled_write_loaded_line(uint8_t line) {
+    static const char text[] PROGMEM = "   [ LOADED ]";
+    char              buf[LINE_COLS + 1];
+    uint8_t           len = vstrlen(text);
+    for (uint8_t i = 0; i < LINE_COLS; i++) {
+        buf[i] = (i < len) ? pgm_read_byte(&text[i]) : ' ';
     }
     buf[LINE_COLS] = '\0';
     oled_write_line_final(line, buf, false);
@@ -255,50 +249,95 @@ static void render_left_main(uint32_t now) {
     }
 }
 
-static const char phrases[][19] PROGMEM = {
-    "BRAINDANCE LOAD...", "QUICKHACK", "NETRUNNER", "JACK IN", "ICEBREAK",
-    "DAEMON UPLOAD", "RELIC DETECTED", "TRACE PROTOCOL", "FLATLINE", "SHARD COMPLETE"
-};
-#define NUM_PHRASES (sizeof(phrases) / sizeof(phrases[0]))
+static const char skills[][19] PROGMEM = {"BRAINDANCE LOAD...", "QUICKHACK", "NETRUNNER", "JACK IN", "ICEBREAK", "DAEMON UPLOAD", "RELIC DETECTED", "TRACE PROTOCOL", "FLATLINE", "SHARD COMPLETE"};
+#define NUM_SKILLS (sizeof(skills) / sizeof(skills[0]))
 
-#define CYCLE_MS     3000
-#define TYPE_MS      1000
-#define GLITCHOUT_T  (CYCLE_MS - 250)
+enum skill_state { SKILL_TYPE, SKILL_BAR, SKILL_LOADED, SKILL_CLEAR };
+
+#define SKILL_BAR_MS    1200
+#define SKILL_LOADED_MS 1200
+#define SKILL_CLEAR_MS   250
+#define LOADED_BLINK_MS  300
+
+static enum skill_state skill_st          = SKILL_TYPE;
+static uint32_t         skill_state_start = 0;
+static uint8_t          skill_idx         = 0;
+static uint8_t          typed             = 0;
+static uint32_t         last_activity     = 0;
+static uint8_t          activity_parity   = 0;
+
+// Ma trận đổi cả lúc nhấn lẫn lúc nhả, nên đếm parity để một phím ra một ký tự.
+static void skill_count_keys(void) {
+    uint32_t a = last_matrix_activity_time();
+    if (a == last_activity) return;
+    last_activity = a;
+    activity_parity ^= 1;
+    if (activity_parity == 0) typed++;
+}
 
 static void render_right_main(uint32_t now) {
-    static uint8_t  phrase_idx = 0;
-    static uint32_t cycle_start = 0;
+    uint8_t len = vstrlen(skills[skill_idx]);
 
-    oled_write_line_plain(PSTR(""), 0, false);
-    oled_write_line_plain(PSTR(""), 2, false);
-
-    uint32_t t = now - cycle_start;
-    uint8_t  len = vstrlen(phrases[phrase_idx]);
-
-    if (t < TYPE_MS) {
-        uint8_t rev = (uint8_t)(t * len / TYPE_MS);
-        if (rev > len) rev = len;
-        oled_write_line_type(phrases[phrase_idx], 1, rev, false);
-    } else if (t < GLITCHOUT_T) {
-        if ((prng_next() % 40) == 0) {
-            oled_write_line_flicker(phrases[phrase_idx], 1, prng_next() % len, false);
-        } else {
-            oled_write_line_plain(phrases[phrase_idx], 1, false);
-        }
-    } else {
-        uint8_t rev = len - (uint8_t)((t - GLITCHOUT_T) * len / (CYCLE_MS - GLITCHOUT_T));
-        if (rev > len) rev = len;
-        oled_write_line_type(phrases[phrase_idx], 1, rev, false);
-        if (t >= CYCLE_MS) {
-            phrase_idx = (phrase_idx + 1) % NUM_PHRASES;
-            cycle_start = now;
-        }
+    switch (skill_st) {
+        case SKILL_TYPE:
+            skill_count_keys();
+            if (typed >= len) {
+                skill_st          = SKILL_BAR;
+                skill_state_start = now;
+            }
+            break;
+        case SKILL_BAR:
+            if (now - skill_state_start >= SKILL_BAR_MS) {
+                skill_st          = SKILL_LOADED;
+                skill_state_start = now;
+            }
+            break;
+        case SKILL_LOADED:
+            if (now - skill_state_start >= SKILL_LOADED_MS) {
+                skill_st          = SKILL_CLEAR;
+                skill_state_start = now;
+            }
+            break;
+        case SKILL_CLEAR:
+            if (now - skill_state_start >= SKILL_CLEAR_MS) {
+                skill_idx = (skill_idx + 1) % NUM_SKILLS;
+                typed     = 0;
+                skill_st  = SKILL_TYPE;
+            }
+            break;
     }
 
-    // L3: progress bar
-    uint8_t fill = (uint8_t)(t * LINE_COLS / CYCLE_MS);
-    if (fill > LINE_COLS) fill = LINE_COLS;
-    oled_write_bar_line(3, fill);
+    // Dòng 0 luôn trống: band trống tạo tương phản cho frame jump của glitch.
+    oled_write_line_plain(PSTR(""), 0, false);
+
+    if (skill_st == SKILL_CLEAR) {
+        oled_write_line_plain(PSTR(""), 1, false);
+        oled_write_line_plain(PSTR(""), 2, false);
+        oled_write_line_plain(PSTR(""), 3, false);
+        return;
+    }
+
+    oled_write_line_type(skills[skill_idx], 1, typed, false);
+
+    if (skill_st == SKILL_TYPE) {
+        oled_write_line_plain(PSTR(""), 2, false);
+        oled_write_line_plain(PSTR(""), 3, false);
+        return;
+    }
+
+    uint32_t st   = now - skill_state_start;
+    uint8_t  fill = LINE_COLS;
+    if (skill_st == SKILL_BAR) {
+        fill = (uint8_t)(st * LINE_COLS / SKILL_BAR_MS);
+        if (fill > LINE_COLS) fill = LINE_COLS;
+    }
+    oled_write_bar_line(2, fill);
+
+    if (skill_st == SKILL_LOADED && ((st / LOADED_BLINK_MS) & 1) == 0) {
+        oled_write_loaded_line(3);
+    } else {
+        oled_write_line_plain(PSTR(""), 3, false);
+    }
 }
 
 // ---- Full-screen glitch + tearing (định kỳ) ----
@@ -393,7 +432,4 @@ static void oled_task_user_impl(void) {
 bool oled_task_user(void) {
     oled_task_user_impl();
     return false; // ngăn board-level oled_task_kb (sofle.c) vẽ text/QMK logo mặc định
-}
-
-void cyberdeck_key_pressed(void) {
 }

@@ -83,6 +83,82 @@ static void test_info_reveal(void) {
     assert(info_reveal(5000, 400, 650, 999999) == REVEAL_DONE);
 }
 
+static void reset_skill_state(void) {
+    skill_st          = SKILL_TYPE;
+    skill_idx         = 0;
+    typed             = 0;
+    skill_state_start = stub_timer;
+    last_activity     = stub_activity;
+    activity_parity   = 0;
+}
+
+// Một phím sinh hai lần đổi ma trận: nhấn và nhả.
+static void press_key(void) {
+    stub_activity++;
+    render_right_main(stub_timer);
+    stub_activity++;
+    render_right_main(stub_timer);
+}
+
+static void test_skill_go_du_ten_thi_chay_bar(void) {
+    stub_timer = 100000;
+    reset_skill_state();
+    uint8_t len = vstrlen(skills[0]);
+    for (uint8_t i = 0; i < len; i++) {
+        press_key();
+    }
+    assert(typed == len);
+    assert(skill_st == SKILL_BAR);
+}
+
+static void test_skill_chu_ky_day_du(void) {
+    stub_timer = 200000;
+    reset_skill_state();
+    uint8_t len = vstrlen(skills[0]);
+    for (uint8_t i = 0; i < len; i++) {
+        press_key();
+    }
+    assert(skill_st == SKILL_BAR);
+
+    stub_timer += SKILL_BAR_MS;
+    render_right_main(stub_timer);
+    assert(skill_st == SKILL_LOADED);
+
+    stub_timer += SKILL_LOADED_MS;
+    render_right_main(stub_timer);
+    assert(skill_st == SKILL_CLEAR);
+
+    stub_timer += SKILL_CLEAR_MS;
+    render_right_main(stub_timer);
+    assert(skill_st == SKILL_TYPE);
+    assert(skill_idx == 1);
+    assert(typed == 0);
+}
+
+static void test_skill_ngung_go_thi_dung_yen(void) {
+    stub_timer = 300000;
+    reset_skill_state();
+    press_key();
+    assert(skill_st == SKILL_TYPE);
+    assert(typed == 1);
+
+    // Không gõ thêm, thời gian trôi rất lâu: trạng thái không được tự nhảy.
+    stub_timer += 60000;
+    render_right_main(stub_timer);
+    assert(skill_st == SKILL_TYPE);
+    assert(typed == 1);
+}
+
+static void test_skill_dong_0_luon_trong(void) {
+    stub_timer = 400000;
+    reset_skill_state();
+    render_right_main(stub_timer);
+    // Dòng 0 chỉ có dấu nhắc, phần còn lại là khoảng trắng.
+    assert(stub_screen[0][0] == '>');
+    assert(strspn(stub_screen[0] + 1, " ") == 20);
+    assert(strlen(stub_screen[0]) == 21);
+}
+
 int main(void) {
     test_type_reveal_zero();
     test_type_reveal_giua();
@@ -92,6 +168,10 @@ int main(void) {
     test_info_line_day_du();
     test_info_line_dang_decode();
     test_info_reveal();
+    test_skill_go_du_ten_thi_chay_bar();
+    test_skill_chu_ky_day_du();
+    test_skill_ngung_go_thi_dung_yen();
+    test_skill_dong_0_luon_trong();
     printf("tất cả test qua\n");
     return 0;
 }
