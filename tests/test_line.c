@@ -65,6 +65,25 @@ static void test_info_line_dang_decode(void) {
     assert(strlen(stub_screen[2]) == 21);
 }
 
+static void test_info_reveal(void) {
+    // Chưa tới lượt dòng này thì báo ẩn.
+    assert(info_reveal(0, 400, 650, 999999) == REVEAL_HIDDEN);
+    assert(info_reveal(399, 400, 650, 999999) == REVEAL_HIDDEN);
+
+    // Trong cửa sổ load thì reveal chạy từ 0 lên.
+    assert(info_reveal(400, 400, 650, 999999) == 0);
+    assert(info_reveal(649, 400, 650, 999999) > 0);
+    assert(info_reveal(649, 400, 650, 999999) <= 8);
+
+    // Qua cửa sổ load, giá trị vừa đổi thì chạy animation đổi giá trị.
+    assert(info_reveal(5000, 400, 650, 0) == 0);
+    assert(info_reveal(5000, 400, 650, 200) == 5);
+
+    // Qua cửa sổ load, giá trị không đổi lâu rồi thì hiện đầy.
+    assert(info_reveal(5000, 400, 650, 300) == REVEAL_DONE);
+    assert(info_reveal(5000, 400, 650, 999999) == REVEAL_DONE);
+}
+
 int main(void) {
     test_type_reveal_zero();
     test_type_reveal_giua();
@@ -73,6 +92,7 @@ int main(void) {
     test_type_chuoi_dai_bi_cat();
     test_info_line_day_du();
     test_info_line_dang_decode();
+    test_info_reveal();
     printf("tất cả test qua\n");
     return 0;
 }

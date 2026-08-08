@@ -177,12 +177,37 @@ static void render_boot(uint32_t now) {
     }
 }
 
+#define MAIN_L0_MS  400  // xong dòng 0 (header)
+#define MAIN_L1_MS  650  // xong dòng 1 (LAYER)
+#define MAIN_L2_MS  900  // xong dòng 2 (CAPSLOCK)
+#define MAIN_L3_MS 1150  // xong dòng 3 (MODE)
+
+#define REVEAL_HIDDEN 0xFF
+#define REVEAL_DONE   LINE_COLS
+
+// Reveal của một dòng info. Trong cửa sổ load đầu tiên thì chạy theo tm; qua
+// cửa sổ đó thì chạy theo animation khi giá trị đổi; ngoài ra hiện đầy.
+// Trả REVEAL_HIDDEN nghĩa là dòng chưa tới lượt, phải để trống.
+static uint8_t info_reveal(uint32_t tm, uint16_t from, uint16_t to, uint32_t since_change) {
+    if (tm < from) return REVEAL_HIDDEN;
+    if (tm < to) return (uint8_t)((tm - from) * 8 / (to - from));
+    if (since_change < 300) return (uint8_t)(since_change / 40);
+    return REVEAL_DONE;
+}
+
 static void render_left_main(uint32_t now) {
-    static const char layer_names[][8] PROGMEM = { "QWERTY", "COLEMAK", "LOWER", "RAISE", "ADJUST" };
+    static const char layer_names[][8] PROGMEM = {"QWERTY", "COLEMAK", "LOWER", "RAISE", "ADJUST"};
+    static const char header[] PROGMEM         = "CYBERDECK // v1.0.1";
 
-    oled_write_line_plain(PSTR("CYBERDECK // v1.0.1"), 0, false);
+    uint32_t tm = now - main_start;
 
-    // L1: LAYER: <name>
+    // Dòng 0: header, decode trong cửa sổ load đầu tiên.
+    if (tm < MAIN_L0_MS) {
+        oled_write_line_type(header, 0, (uint8_t)(tm * 19 / MAIN_L0_MS), false);
+    } else {
+        oled_write_line_plain(header, 0, false);
+    }
+
     uint8_t layer = get_highest_layer(layer_state);
     if (layer > 4) layer = 4;
     static uint8_t  last_layer = 0xFF;
@@ -191,32 +216,43 @@ static void render_left_main(uint32_t now) {
         last_layer = layer;
         layer_anim = now;
     }
-    uint32_t lt = now - layer_anim;
-    uint8_t  reveal = (lt < 300) ? (uint8_t)(lt / 40) : 21;
-    oled_write_info_line(1, PSTR("LAYER:"), layer_names[layer], reveal, false);
 
-    // L2: CAPS indicator (glitch reveal giống dòng LAYER)
-    bool caps = host_keyboard_led_state().caps_lock;
-    static bool  last_caps = false;
+    bool            caps      = host_keyboard_led_state().caps_lock;
+    static bool     last_caps = false;
     static uint32_t caps_anim = 0;
     if (caps != last_caps) {
         last_caps = caps;
         caps_anim = now;
     }
-    uint32_t ct = now - caps_anim;
-    uint8_t  creveal = (ct < 300) ? (uint8_t)(ct / 100) : 3;
-    oled_write_info_line(2, PSTR("CAPSLOCK:"), caps ? PSTR("ON") : PSTR("OFF"), creveal, false);
 
-    // L3: MODE WIN/MAC
-    bool mac = keymap_config.swap_lctl_lgui;
-    static bool  last_mac = false;
+    bool            mac       = keymap_config.swap_lctl_lgui;
+    static bool     last_mac  = false;
     static uint32_t mode_anim = 0;
     if (mac != last_mac) {
-        last_mac = mac;
+        last_mac  = mac;
         mode_anim = now;
     }
-    uint8_t mreveal = ((now - mode_anim) < 300) ? (uint8_t)((now - mode_anim) / 75) : 3;
-    oled_write_info_line(3, PSTR("MODE:"), mac ? PSTR("MAC") : PSTR("WIN"), mreveal, false);
+
+    uint8_t r1 = info_reveal(tm, MAIN_L0_MS, MAIN_L1_MS, now - layer_anim);
+    if (r1 == REVEAL_HIDDEN) {
+        oled_write_line_plain(PSTR(""), 1, false);
+    } else {
+        oled_write_info_line(1, PSTR("LAYER:"), layer_names[layer], r1, false);
+    }
+
+    uint8_t r2 = info_reveal(tm, MAIN_L1_MS, MAIN_L2_MS, now - caps_anim);
+    if (r2 == REVEAL_HIDDEN) {
+        oled_write_line_plain(PSTR(""), 2, false);
+    } else {
+        oled_write_info_line(2, PSTR("CAPSLOCK:"), caps ? PSTR("ON") : PSTR("OFF"), r2, false);
+    }
+
+    uint8_t r3 = info_reveal(tm, MAIN_L2_MS, MAIN_L3_MS, now - mode_anim);
+    if (r3 == REVEAL_HIDDEN) {
+        oled_write_line_plain(PSTR(""), 3, false);
+    } else {
+        oled_write_info_line(3, PSTR("MODE:"), mac ? PSTR("MAC") : PSTR("WIN"), r3, false);
+    }
 }
 
 static const char phrases[][19] PROGMEM = {
