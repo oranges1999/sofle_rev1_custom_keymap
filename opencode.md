@@ -3,10 +3,10 @@
 Bàn phím: `sofle/rev1` (split Pro Micro/ATmega32U4, 2x OLED I2C SSD1306 128x32).
 Nửa trái là master, nửa phải là slave.
 
-Build: `qmk compile -kb sofle/rev1 -km sofle_rev1_custom_keymap` — OK, 24390/28672 bytes (85%).
+Build: `qmk compile -kb sofle/rev1 -km sofle_rev1_custom_keymap` — OK, 24620/28672 bytes (85%).
 Nạp: `qmk flash -kb sofle/rev1 -km sofle_rev1_custom_keymap`, nạp cả 2 nửa.
 
-Phiên bản hiển thị: v1.1.0 (`oled_cyberdeck.c`, biến `header` trong `render_left_main`).
+Phiên bản hiển thị: v1.2.1 (`oled_cyberdeck.c`, biến `header` trong `render_left_main`).
 
 ## Boot — 5 giai đoạn tuần tự (cả 2 nửa)
 
@@ -28,13 +28,15 @@ Hai nửa có timer riêng nên chuỗi boot của chúng không đồng bộ tu
 Sau boot, 4 dòng hiện ra lần lượt theo `tm = now - main_start`: dòng 0 trong [0, 400), dòng 1 trong [400, 650), dòng 2 trong [650, 900), dòng 3 trong [900, 1150). Dòng chưa tới lượt thì để trống.
 
 ```
-CYBERDECK // v1.1.0
+CYBERDECK // v1.2.1
 LAYER:    QWERTY
 CAPSLOCK: OFF
 MODE:     WIN
 ```
 
-Nhãn pad tới cột `INFO_LABEL_W` (10), value decode từng ký tự.
+Nhãn pad tới cột `INFO_LABEL_W` (10), value decode từng ký tự. Cả 4 dòng đều không có tiền tố `> `.
+
+Caps lock bật thì **đảo màu cả dòng** `CAPSLOCK:` (tham số `invert` của `oled_write_info_line`).
 
 Hàm `info_reveal(tm, from, to, since_change)` gộp hai nguồn animation vào một quy tắc: trong cửa sổ load thì chạy theo `tm`; qua cửa sổ đó thì chạy theo `since_change` khi layer/caps/mode đổi; ngoài ra trả `REVEAL_DONE`. Trả `REVEAL_HIDDEN` nghĩa là dòng chưa tới lượt.
 
@@ -44,20 +46,41 @@ Hằng số: `MAIN_L0_MS`, `MAIN_L1_MS`, `MAIN_L2_MS`, `MAIN_L3_MS`.
 
 State machine 4 trạng thái trong `render_right_main`:
 
-| Trạng thái     | Thời lượng    | Dòng 0 | Dòng 1                        | Dòng 2     | Dòng 3                  |
-| -------------- | ------------- | ------ | ----------------------------- | ---------- | ----------------------- |
-| `SKILL_TYPE`   | tới khi gõ đủ | trống  | tên skill decode theo `typed` | trống      | trống                   |
-| `SKILL_BAR`    | 1200ms        | trống  | tên đầy đủ                    | bar 0 → 21 | trống                   |
-| `SKILL_LOADED` | 1200ms        | trống  | tên đầy đủ                    | bar đầy    | `[ LOADED ]` nháy 300ms |
-| `SKILL_CLEAR`  | 250ms         | trống  | trống                         | trống      | trống                   |
+| Trạng thái     | Thời lượng    | Dòng 0                       | Dòng 1     | Dòng 2                   | Dòng 3 |
+| -------------- | ------------- | ---------------------------- | ---------- | ------------------------ | ------ |
+| `SKILL_TYPE`   | tới khi gõ đủ | `> LỆNH` + con trỏ nhấp nháy | trống      | trống                    | trống  |
+| `SKILL_BAR`    | 1200ms        | `> LỆNH` đầy đủ, hết con trỏ | bar 0 → 21 | trống                    | trống  |
+| `SKILL_LOADED` | 1200ms        | `> LỆNH` đầy đủ              | bar đầy    | `[ CÂU BÁO ]` nháy 300ms | trống  |
+| `SKILL_CLEAR`  | 250ms         | trống                        | trống      | trống                    | trống  |
 
 `SKILL_CLEAR` xong thì `skill_idx` tiến, `typed` về 0, quay lại `SKILL_TYPE`.
 
-Dòng 0 luôn trống là chủ ý: band trống tạo tương phản cho hiệu ứng glitch toàn màn.
+Dòng 3 luôn trống là chủ ý: band trống tạo tương phản cho hiệu ứng glitch toàn màn.
 
-`[ LOADED ]` nháy bằng cách bật/tắt hiển thị, khác với `SYSTEM ONLINE` ở boot dùng đảo `invert`.
+Text ở dòng 0 hiện thẳng, **không decode**. Con trỏ là khối 5x8 đặc — ký tự space đảo màu qua `oled_write_char(' ', true)`, nên không phụ thuộc glyph nào trong font. Nhấp nháy `CURSOR_BLINK_MS` (250ms) và chỉ hiện lúc `SKILL_TYPE`; gõ xong tên thì tắt, đọc ra như lệnh đã nhập và đang chạy.
 
-Hằng số: `SKILL_BAR_MS`, `SKILL_LOADED_MS`, `SKILL_CLEAR_MS`, `LOADED_BLINK_MS`.
+`[ CÂU BÁO ]` nháy bằng cách bật/tắt hiển thị, khác với `SYSTEM ONLINE` ở boot dùng đảo `invert`.
+
+Hằng số: `SKILL_BAR_MS`, `SKILL_LOADED_MS`, `SKILL_CLEAR_MS`, `LOADED_BLINK_MS`, `CURSOR_BLINK_MS`.
+
+### Cặp lệnh ↔ câu báo
+
+`skills[]` và `done_msgs[]` ghép cặp theo **cùng chỉ số**: dòng lệnh là hành động, câu báo là kết quả của chính hành động đó. Đặt theo lore netrunning Cyberpunk.
+
+| Lệnh              | Câu báo          |
+| ----------------- | ---------------- |
+| `BREACH PROTOCOL` | `SUBNET OPEN`    |
+| `ICEPICK UPLOAD`  | `ICE SHATTERED`  |
+| `DATAMINE`        | `PACKAGE PULLED` |
+| `QUICKHACK QUEUE` | `RAM RECLAIMED`  |
+| `DAEMON UPLOAD`   | `DAEMON ACTIVE`  |
+| `BRAINDANCE LOAD` | `BD SYNCED`      |
+| `SHARD INJECT`    | `SHARD MOUNTED`  |
+| `TRACE EVASION`   | `TRACE LOST`     |
+| `BLACKWALL PROBE` | `BLACKWALL HIT`  |
+| `SOULKILLER RUN`  | `FLATLINE`       |
+
+Giới hạn độ dài: lệnh ≤ `LINE_COLS - CMD_PREFIX_W` (19), câu báo ≤ `DONE_MSG_W` (14). Có test kiểm cả hai cho mọi phần tử.
 
 ### Cách slave nhận được sự kiện phím
 
@@ -88,7 +111,9 @@ Chạy được vì `rules.mk` chỉ khai báo `SRC += oled_cyberdeck.c` nên QM
 
 **Giới hạn quan trọng:** stub định nghĩa `pgm_read_byte` thành phép dereference thường, nên bộ test **không phát hiện được việc quên `pgm_read_byte`**. Code đọc thẳng con trỏ PROGMEM sẽ pass trên host và trả về rác trên AVR. Phải tự soát bằng mắt khi thêm code đọc chuỗi.
 
-Các assert đã được kiểm bằng mutation testing: xoá con trỏ decode, đổi text `[ LOADED ]`, hoán `#`/`-`, đảo pha nháy, render sai `skill_idx` — tất cả đều làm test fail.
+Các assert đã được kiểm bằng mutation testing — tất cả đều làm test fail: xoá con trỏ decode, xoá con trỏ khối, con trỏ không tắt khi hết `SKILL_TYPE`, con trỏ không nhấp nháy, bỏ tiền tố `>`, câu báo luôn lấy `done_msgs[0]`, câu báo lệch một chỉ số, bỏ ngoặc vuông, thụt lề sai, bar/lệnh vẽ sai dòng, caps không đảo màu, `SKILL_CLEAR` sót dòng.
+
+Khi chạy mutation, nhắm bằng **nguyên khối code** chứ đừng nhắm một dòng lẻ: nhiều lời gọi `oled_write_line_plain(PSTR(""), n, false)` giống hệt nhau nằm ở `render_boot`, `render_left_main` và `render_right_main`, nên thay "lần xuất hiện đầu tiên" rất dễ trúng nhầm hàm và tưởng nhầm là assert không bắt được.
 
 ## Lưu ý
 
@@ -98,7 +123,8 @@ Các assert đã được kiểm bằng mutation testing: xoá con trỏ decode,
 - Chuỗi hằng phải nằm trong PROGMEM và đọc bằng `pgm_read_byte()`.
 - `LINE_COLS` là 21. Mọi dòng ghi ra OLED phải đúng 21 ký tự cộng `'\0'` ở `buf[21]`.
 - `OLED_TIMEOUT 0` trong `config.h` để hai màn luôn bật. Không có nó thì mặc định 60s, và màn phải sẽ tắt nếu chỉ gõ ở nửa trái — vì `SPLIT_ACTIVITY_ENABLE` đồng bộ timestamp nhưng không gọi `oled_on()`.
-- Chuỗi `header` hiện dài đúng 19 ký tự, khớp với hằng `19` hardcode trong lời gọi `oled_write_line_type` ở `render_left_main`. Nếu bump version làm đổi độ dài (ví dụ `v1.10.0`), phải sửa hằng đó theo.
+- Chuỗi `header` hiện dài đúng 19 ký tự, khớp với hằng `19` hardcode trong lời gọi `oled_write_line_type` ở `render_left_main`. Nếu bump version làm đổi độ dài (ví dụ `v1.10.0`), phải sửa hằng đó theo. Test `test_man_trai_header_va_caps` ghim nguyên chuỗi header nên nó sẽ bắt được, nhớ sửa cả test khi bump version.
+- Dấu `> ` chỉ thuộc về `oled_write_line_cursor()` (dòng lệnh màn phải). Mọi hàm ghi dòng khác đều không có tiền tố, nên `oled_write_line_plain(PSTR(""), n, false)` cho ra dòng trống thật sự.
 
 ## Cần kiểm khi nạp
 
@@ -106,7 +132,7 @@ Các assert đã được kiểm bằng mutation testing: xoá con trỏ decode,
 2. Thanh bar boot chạy đủ 21/21 rồi mới xoá màn.
 3. Màn trái đổ ra 4 dòng lần lượt trong ~1.15s.
 4. **Đếm số phím cần để gõ hết một tên skill, thử riêng tay trái rồi riêng tay phải** — xem phần hạn chế ở trên.
-5. Gõ hết tên thì bar tự chạy, xong nháy `[ LOADED ]`, rồi xoá màn chờ skill kế.
-6. Ngừng gõ giữa chừng thì màn phải đứng yên, không tự chạy tiếp.
-7. Nhịp `[ LOADED ]` (300ms) và chu kỳ glitch (2500ms) đủ gần để burst có thể rơi trúng cùng pha nháy, nhìn ra như màn đơ chứ không phải hiệu ứng.
+5. Gõ hết tên thì bar tự chạy, xong nháy câu báo, rồi xoá màn chờ lệnh kế.
+6. Ngừng gõ giữa chừng thì màn phải đứng yên, không tự chạy tiếp, con trỏ khối vẫn nhấp nháy.
+7. Nhịp câu báo (300ms) và chu kỳ glitch (2500ms) đủ gần để burst có thể rơi trúng cùng pha nháy, nhìn ra như màn đơ chứ không phải hiệu ứng.
 8. Gõ liên tục không trễ phím.

@@ -117,7 +117,7 @@ static void test_man_trai_header_va_caps(void) {
     render_left_main(stub_timer);
 
     // Header bắt đầu ngay cột 0, không có dấu nhắc.
-    expect_line(0, "CYBERDECK // v1.1.0");
+    expect_line(0, "CYBERDECK // v1.2.1");
     assert(strncmp(stub_screen[2], "CAPSLOCK: OFF", 13) == 0);
     assert(!stub_invert[2]);
 
