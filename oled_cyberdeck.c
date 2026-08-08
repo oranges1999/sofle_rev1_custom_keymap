@@ -29,14 +29,13 @@ static void oled_write_line_final(uint8_t line, char *buf, bool invert) {
 }
 
 // Ghi đầy đủ 1 dòng 21 ký tự (không gọi oled_clear mỗi frame để giảm tải I2C).
-// Tất cả dòng text đều có dấu '> ' ở đầu (kiểu terminal), trừ progress bar.
+// Không có tiền tố: dấu '> ' giờ chỉ thuộc về oled_write_line_cursor().
+// Truyền PSTR("") để ghi một dòng trống thật sự.
 static void oled_write_line_plain(const char *text, uint8_t line, bool invert) {
     char buf[LINE_COLS + 1];
     uint8_t len = vstrlen(text);
-    buf[0] = '>';
-    buf[1] = ' ';
-    for (uint8_t i = 0; i < LINE_COLS - 2; i++) {
-        buf[i + 2] = (i < len) ? pgm_read_byte(&text[i]) : ' ';
+    for (uint8_t i = 0; i < LINE_COLS; i++) {
+        buf[i] = (i < len) ? pgm_read_byte(&text[i]) : ' ';
     }
     buf[LINE_COLS] = '\0';
     oled_write_line_final(line, buf, invert);
@@ -52,16 +51,41 @@ static char decode_char(const char *text, uint8_t idx, uint8_t len, uint8_t reve
 }
 
 // Decode từng ký tự: xem decode_char(). Ký tự rác ở vị trí reveal đóng vai trò con trỏ.
+// Không có tiền tố '> '.
 static void oled_write_line_type(const char *text, uint8_t line, uint8_t reveal, bool invert) {
     char    buf[LINE_COLS + 1];
     uint8_t len = vstrlen(text);
-    buf[0] = '>';
-    buf[1] = ' ';
-    for (uint8_t i = 0; i < LINE_COLS - 2; i++) {
-        buf[i + 2] = decode_char(text, i, len, reveal);
+    for (uint8_t i = 0; i < LINE_COLS; i++) {
+        buf[i] = decode_char(text, i, len, reveal);
     }
     buf[LINE_COLS] = '\0';
     oled_write_line_final(line, buf, invert);
+}
+
+// Dòng lệnh kiểu terminal: tiền tố '> ', text hiện thẳng (không decode), con trỏ
+// khối nhấp nháy ngay sau ký tự cuối. Khối đặc = ký tự space đảo màu, nên không
+// phụ thuộc glyph nào trong font.
+#define CMD_PREFIX_W 2
+
+static void oled_write_line_cursor(const char *text, uint8_t line, uint8_t shown, bool cursor_on) {
+    char    buf[LINE_COLS + 1];
+    uint8_t len = vstrlen(text);
+    if (shown > len) shown = len;
+    buf[0] = '>';
+    buf[1] = ' ';
+    for (uint8_t i = 0; i < LINE_COLS - CMD_PREFIX_W; i++) {
+        buf[i + CMD_PREFIX_W] = (i < shown) ? pgm_read_byte(&text[i]) : ' ';
+    }
+    buf[LINE_COLS] = '\0';
+    oled_write_line_final(line, buf, false);
+
+    // Vẽ đè con trỏ sau khi đã ghi cả dòng: oled_write() đảo màu cả chuỗi nên
+    // không đảo riêng một ký tự được.
+    uint8_t col = CMD_PREFIX_W + shown;
+    if (cursor_on && col < LINE_COLS) {
+        oled_set_cursor(col, line);
+        oled_write_char(' ', true);
+    }
 }
 
 // Info line: "LABEL:" pad tới INFO_LABEL_W, rồi value (glitch reveal). Các dòng LAYER/CAPSLOCK/MODE đồng đều.
@@ -97,13 +121,29 @@ static void oled_write_bar_line(uint8_t line, uint8_t fill) {
     oled_write_line_final(line, buf, false);
 }
 
-// Dòng báo nạp xong. "[" nằm ở cột 3, không có tiền tố "> ".
-static void oled_write_loaded_line(uint8_t line) {
-    static const char text[] PROGMEM = "   [ LOADED ]";
-    char              buf[LINE_COLS + 1];
-    uint8_t           len = vstrlen(text);
-    for (uint8_t i = 0; i < LINE_COLS; i++) {
-        buf[i] = (i < len) ? pgm_read_byte(&text[i]) : ' ';
+// Dòng báo kết quả: "   [ MSG ]", '[' nằm ở cột 3. Không có tiền tố "> ".
+// msg dài tối đa DONE_MSG_W ký tự thì vừa khít 21 cột.
+#define DONE_MSG_INDENT 3
+#define DONE_MSG_W      (LINE_COLS - DONE_MSG_INDENT - 4) // trừ "[ " và " ]"
+
+static void oled_write_done_line(uint8_t line, const char *msg) {
+    char    buf[LINE_COLS + 1];
+    uint8_t len = vstrlen(msg);
+    if (len > DONE_MSG_W) len = DONE_MSG_W;
+
+    uint8_t i = 0;
+    for (; i < DONE_MSG_INDENT; i++) {
+        buf[i] = ' ';
+    }
+    buf[i++] = '[';
+    buf[i++] = ' ';
+    for (uint8_t k = 0; k < len; k++) {
+        buf[i++] = pgm_read_byte(&msg[k]);
+    }
+    buf[i++] = ' ';
+    buf[i++] = ']';
+    for (; i < LINE_COLS; i++) {
+        buf[i] = ' ';
     }
     buf[LINE_COLS] = '\0';
     oled_write_line_final(line, buf, false);
@@ -238,7 +278,8 @@ static void render_left_main(uint32_t now) {
     if (r2 == REVEAL_HIDDEN) {
         oled_write_line_plain(PSTR(""), 2, false);
     } else {
-        oled_write_info_line(2, PSTR("CAPSLOCK:"), caps ? PSTR("ON") : PSTR("OFF"), r2, false);
+        // Caps lock bật thì đảo màu cả dòng cho dễ liếc thấy.
+        oled_write_info_line(2, PSTR("CAPSLOCK:"), caps ? PSTR("ON") : PSTR("OFF"), r2, caps);
     }
 
     uint8_t r3 = info_reveal(tm, MAIN_L2_MS, MAIN_L3_MS, now - mode_anim);
@@ -249,15 +290,19 @@ static void render_left_main(uint32_t now) {
     }
 }
 
-static const char skills[][19] PROGMEM = {"BRAINDANCE LOAD...", "QUICKHACK", "NETRUNNER", "JACK IN", "ICEBREAK", "DAEMON UPLOAD", "RELIC DETECTED", "TRACE PROTOCOL", "FLATLINE", "SHARD COMPLETE"};
+// Lệnh netrunning và câu báo kết quả, ghép cặp theo cùng chỉ số: dòng lệnh là
+// hành động, dòng báo là kết quả của chính hành động đó.
+static const char skills[][17] PROGMEM = {"BREACH PROTOCOL", "ICEPICK UPLOAD", "DATAMINE", "QUICKHACK QUEUE", "DAEMON UPLOAD", "BRAINDANCE LOAD", "SHARD INJECT", "TRACE EVASION", "BLACKWALL PROBE", "SOULKILLER RUN"};
+static const char done_msgs[][15] PROGMEM = {"SUBNET OPEN", "ICE SHATTERED", "PACKAGE PULLED", "RAM RECLAIMED", "DAEMON ACTIVE", "BD SYNCED", "SHARD MOUNTED", "TRACE LOST", "BLACKWALL HIT", "FLATLINE"};
 #define NUM_SKILLS (sizeof(skills) / sizeof(skills[0]))
 
 enum skill_state { SKILL_TYPE, SKILL_BAR, SKILL_LOADED, SKILL_CLEAR };
 
-#define SKILL_BAR_MS    1200
-#define SKILL_LOADED_MS 1200
-#define SKILL_CLEAR_MS   250
-#define LOADED_BLINK_MS  300
+#define SKILL_BAR_MS      1200
+#define SKILL_LOADED_MS   1200
+#define SKILL_CLEAR_MS     250
+#define LOADED_BLINK_MS    300
+#define CURSOR_BLINK_MS    250
 
 static enum skill_state skill_st          = SKILL_TYPE;
 static uint32_t         skill_state_start = 0;
@@ -307,21 +352,24 @@ static void render_right_main(uint32_t now) {
             break;
     }
 
-    // Dòng 0 luôn trống: band trống tạo tương phản cho frame jump của glitch.
-    oled_write_line_plain(PSTR(""), 0, false);
+    // Dòng 3 luôn trống: band trống tạo tương phản cho frame jump của glitch.
+    oled_write_line_plain(PSTR(""), 3, false);
 
     if (skill_st == SKILL_CLEAR) {
+        oled_write_line_plain(PSTR(""), 0, false);
         oled_write_line_plain(PSTR(""), 1, false);
         oled_write_line_plain(PSTR(""), 2, false);
-        oled_write_line_plain(PSTR(""), 3, false);
         return;
     }
 
-    oled_write_line_type(skills[skill_idx], 1, typed, false);
+    // Con trỏ chỉ nhấp nháy lúc đang gõ; gõ xong thì tắt, đọc ra như lệnh đã
+    // nhập xong và đang chạy.
+    bool cursor_on = (skill_st == SKILL_TYPE) && (((now / CURSOR_BLINK_MS) & 1) == 0);
+    oled_write_line_cursor(skills[skill_idx], 0, typed, cursor_on);
 
     if (skill_st == SKILL_TYPE) {
+        oled_write_line_plain(PSTR(""), 1, false);
         oled_write_line_plain(PSTR(""), 2, false);
-        oled_write_line_plain(PSTR(""), 3, false);
         return;
     }
 
@@ -334,12 +382,12 @@ static void render_right_main(uint32_t now) {
         // nhưng giữ clamp vì làm tròn lên khiến biên trên không còn hiển nhiên.
         if (fill > LINE_COLS) fill = LINE_COLS;
     }
-    oled_write_bar_line(2, fill);
+    oled_write_bar_line(1, fill);
 
     if (skill_st == SKILL_LOADED && ((st / LOADED_BLINK_MS) & 1) == 0) {
-        oled_write_loaded_line(3);
+        oled_write_done_line(2, done_msgs[skill_idx]);
     } else {
-        oled_write_line_plain(PSTR(""), 3, false);
+        oled_write_line_plain(PSTR(""), 2, false);
     }
 }
 
