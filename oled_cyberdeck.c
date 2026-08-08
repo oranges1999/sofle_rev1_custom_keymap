@@ -43,23 +43,23 @@ static void oled_write_line_plain(const char *text, uint8_t line, bool invert) {
     oled_write_line_final(line, buf, invert);
 }
 
-// Decode từng ký tự: i < reveal là ký tự thật, i == reveal là ký tự rác đang
-// giải mã, i > reveal để trống. Ký tự rác ở vị trí reveal đóng vai trò con trỏ.
+// Quy tắc decode dùng chung: idx < reveal là ký tự thật, idx == reveal là ký
+// tự rác đang giải mã (đóng vai trò con trỏ), còn lại (kể cả vượt quá len) để trống.
+static char decode_char(const char *text, uint8_t idx, uint8_t len, uint8_t reveal) {
+    if (idx >= len) return ' ';
+    if (idx < reveal) return pgm_read_byte(&text[idx]);
+    if (idx == reveal) return glitch_char();
+    return ' ';
+}
+
+// Decode từng ký tự: xem decode_char(). Ký tự rác ở vị trí reveal đóng vai trò con trỏ.
 static void oled_write_line_type(const char *text, uint8_t line, uint8_t reveal, bool invert) {
     char    buf[LINE_COLS + 1];
     uint8_t len = vstrlen(text);
     buf[0] = '>';
     buf[1] = ' ';
     for (uint8_t i = 0; i < LINE_COLS - 2; i++) {
-        if (i >= len) {
-            buf[i + 2] = ' ';
-        } else if (i < reveal) {
-            buf[i + 2] = pgm_read_byte(&text[i]);
-        } else if (i == reveal) {
-            buf[i + 2] = glitch_char();
-        } else {
-            buf[i + 2] = ' ';
-        }
+        buf[i + 2] = decode_char(text, i, len, reveal);
     }
     buf[LINE_COLS] = '\0';
     oled_write_line_final(line, buf, invert);
@@ -99,15 +99,7 @@ static void oled_write_info_line(uint8_t line, const char *label, const char *va
     uint8_t vlen = vstrlen(value);
     for (; i < LINE_COLS; i++) {
         uint8_t k = i - INFO_LABEL_W;
-        if (k >= vlen) {
-            buf[i] = ' ';
-        } else if (k < reveal) {
-            buf[i] = pgm_read_byte(&value[k]);
-        } else if (k == reveal) {
-            buf[i] = glitch_char();
-        } else {
-            buf[i] = ' ';
-        }
+        buf[i]    = decode_char(value, k, vlen, reveal);
     }
     buf[LINE_COLS] = '\0';
     oled_write_line_final(line, buf, invert);

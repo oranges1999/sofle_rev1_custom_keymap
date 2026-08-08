@@ -48,6 +48,8 @@ static inline void oled_set_cursor(uint8_t col, uint8_t line) {
 }
 
 static inline void oled_write(const char *data, bool invert) {
+    // 21 ở đây khớp với LINE_COLS trong oled_cyberdeck.c — nếu LINE_COLS đổi,
+    // sửa luôn con số này (và kích thước stub_screen ở trên).
     memcpy(stub_screen[stub_cursor_line], data, 21);
     stub_screen[stub_cursor_line][21] = '\0';
     stub_invert[stub_cursor_line]     = invert;
