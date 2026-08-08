@@ -72,8 +72,7 @@ static void test_info_reveal(void) {
 
     // Trong cửa sổ load thì reveal chạy từ 0 lên.
     assert(info_reveal(400, 400, 650, 999999) == 0);
-    assert(info_reveal(649, 400, 650, 999999) > 0);
-    assert(info_reveal(649, 400, 650, 999999) <= 8);
+    assert(info_reveal(649, 400, 650, 999999) == 7);
 
     // Qua cửa sổ load, giá trị vừa đổi thì chạy animation đổi giá trị.
     assert(info_reveal(5000, 400, 650, 0) == 0);
