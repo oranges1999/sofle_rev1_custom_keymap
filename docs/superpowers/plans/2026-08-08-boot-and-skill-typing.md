@@ -449,7 +449,10 @@ static void render_boot(uint32_t now) {
 
         if (t >= BOOT_T2_MS) {
             uint32_t bt   = t - BOOT_T2_MS;
-            uint8_t  fill = (uint8_t)(bt * LINE_COLS / (BOOT_T3_MS - BOOT_T2_MS));
+            // Chia làm tròn lên: bt chỉ tới 1499 nên chia thường sẽ chốt ở 20,
+            // thanh bar không bao giờ đầy trước lúc xoá màn.
+            uint16_t span = BOOT_T3_MS - BOOT_T2_MS;
+            uint8_t  fill = (uint8_t)((bt * LINE_COLS + span - 1) / span);
             if (fill > LINE_COLS) fill = LINE_COLS;
             oled_write_bar_line(2, fill);
         } else {
